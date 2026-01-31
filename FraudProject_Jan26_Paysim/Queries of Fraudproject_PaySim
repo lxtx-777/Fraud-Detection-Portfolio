@@ -1,0 +1,148 @@
+/* ===========================================================
+   6) TIME ANALYSIS OF FRAUD CASES
+   Goal: Identify hours (step) with the highest fraud volume
+   =========================================================== */
+
+SELECT 
+    step, 
+    COUNT(*) AS amount_fraud
+FROM transactions
+WHERE isFraud = 1
+GROUP BY step
+ORDER BY amount_fraud DESC;
+
+
+/* ===========================================================
+   7) BALANCE INTEGRITY CHECK
+   Goal: Find transactions where oldbalance - amount != newbalance
+         (potential system bug or manipulation)
+   =========================================================== */
+SELECT 
+    oldbalanceOrg, 
+    amount, 
+    newbalanceOrig,
+    (oldbalanceOrg - amount) AS expected_result
+FROM transactions
+WHERE 
+    type = 'TRANSFER'
+    -- Only keep cases where difference is bigger than 1 cent
+    AND ABS((oldbalanceOrg - amount) - newbalanceOrig) > 0.01;
+
+
+/* ===========================================================
+   8) TOP RECEIVING ACCOUNTS (MULE CANDIDATES)
+   Goal: Top 10 Accounts that received unusual high amounts
+   =========================================================== */
+SELECT 
+    nameDest, 
+    SUM(amount) AS total_received
+FROM transactions
+GROUP BY nameDest
+HAVING total_received > 10000000
+ORDER BY total_received DESC
+LIMIT 10;
+
+
+/* ===========================================================
+   9) STEP-BY-STEP TRANSACTION TRAFFIC
+   Goal: See amount and value of transactions for each timestep (hour)
+   =========================================================== */
+SELECT 
+    step, 
+    COUNT(*) AS amount_transactions, 
+    SUM(amount) AS value_transactions
+FROM transactions
+GROUP BY step
+ORDER BY step ASC;
+
+
+/* ===========================================================
+   10) AVERAGE FRAUD vs LEGIT TRANSACTION SIZE
+   Goal: Compare typical amount of fraudulent vs normal transactions
+   =========================================================== */
+SELECT 
+    'Fraud' AS type, 
+    AVG(amount) AS avg_amount 
+FROM transactions 
+WHERE isFraud = 1
+
+UNION
+
+SELECT 
+    'Legit' AS type, 
+    AVG(amount) AS avg_amount 
+FROM transactions 
+WHERE isFraud = 0;
+
+
+/* ===========================================================
+   12) TOP RECEIVER ACCOUNTS (HIGH AVERAGE TICKET SIZE)
+   Goal: Find recipients with high total volume AND large average amount
+   =========================================================== */
+SELECT 
+    nameDest, 
+    SUM(amount) AS total_received_amount, 
+    AVG(amount) AS average_transaction_size
+FROM transactions
+GROUP BY nameDest
+HAVING AVG(amount) > 500000
+ORDER BY total_received_amount DESC
+LIMIT 5;
+
+
+/* ===========================================================
+   15) CROSS-TYPE ANOMALY: TRANSFERS vs CASH_OUT AVERAGE
+   Goal: Transfers that are larger than the average CASH_OUT amount
+   =========================================================== */
+SELECT 
+    nameOrig, 
+    amount
+FROM transactions
+WHERE 
+    type = 'TRANSFER' 
+    AND amount > (
+        SELECT AVG(amount) 
+        FROM transactions 
+        WHERE type = 'CASH_OUT'
+    )
+ORDER BY amount DESC;
+
+
+/* ===========================================================
+   17.3) BAD RECIPIENTS – FRAUD COUNT PER ACCOUNT
+   Goal: How many fraud transactions each known bad recipient had -> max 2
+   =========================================================== */
+SELECT 
+    nameDest, 
+    COUNT(*) AS fraud_transactions
+FROM transactions
+WHERE 
+    nameDest IN (
+        SELECT nameDest 
+        FROM transactions 
+        WHERE isFraud = 1
+    )
+    AND isFraud = 1
+GROUP BY nameDest
+ORDER BY fraud_transactions DESC;
+
+
+/* ===========================================================
+   22) HIGH-FREQUENCY ACTIVITY (POTENTIAL BOTS)
+   Goal: Identify accounts with < 2 hours between transactions
+         using LAG() window function
+   =========================================================== */
+SELECT * 
+FROM (
+    SELECT 
+        nameOrig, 
+        step, 
+        step - LAG(step) OVER (
+            PARTITION BY nameOrig 
+            ORDER BY step
+        ) AS hours_diff
+    FROM transactions
+) AS calculated_data 
+WHERE 
+    hours_diff IS NOT NULL  
+    AND hours_diff < 2;
